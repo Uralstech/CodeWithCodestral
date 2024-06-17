@@ -1,7 +1,10 @@
 ﻿using CodeWithCodestral.MistralApi;
 using CodeWithCodestral.SaveSystem;
+using CommunityToolkit.Maui.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Diagnostics;
+using System.Text;
 
 namespace CodeWithCodestral.ViewModels;
 
@@ -20,14 +23,16 @@ public partial class MainViewModel : ObservableObject
     private readonly IConnectivity _connectivity;
     private readonly IFileSystem _fileSystem;
     private readonly IFilePicker _filePicker;
+    private readonly IFileSaver _fileSaver;
 
     private readonly MistralChatCompletionRequest _chatCompletionRequest;
 
-    public MainViewModel(IConnectivity connectivity, IFilePicker filePicker, IFileSystem fileSystem)
+    public MainViewModel(IConnectivity connectivity, IFilePicker filePicker, IFileSystem fileSystem, IFileSaver fileSaver)
     {
         _connectivity = connectivity;
         _filePicker = filePicker;
         _fileSystem = fileSystem;
+        _fileSaver = fileSaver;
 
         _chatCompletionRequest = new()
         {
@@ -84,46 +89,14 @@ public partial class MainViewModel : ObservableObject
         _chatCompletionRequest.Messages.Add(response);
         if (response.Content.Contains("```"))
         {
-            string rewrite = response.Content;
-                (int start, int end) = (-1, -1);
-
-                bool wasBacktick = false;
-                for (int i = 0; i < rewrite.Length; i++)
-                {
-                    switch (rewrite[i])
-                    {
-                        case '`':
-                            if (start > -1)
-                            {
-                                end = i;
-                                break;
-                            }
-
-                            wasBacktick = true;
-                            break;
-                        case '\n':
-                            if (wasBacktick)
-                            {
-                                start = Math.Min(rewrite.Length - 1, i + 1);
-                                wasBacktick = false;
-                            }
-                            break;
-                        default: break;
-                    }
-
-                    if (end > -1)
-                        break;
-                }
-
-                rewrite = rewrite[start..end];
-
-            if (JsonSaveSystem.JsonAppData?.AllowAiToOverrideCode == false)
+            string code = GetCodeBlock(response.Content);
+            if (JsonSaveSystem.JsonAppData?.AllowAiToOverrideCode == false && !string.IsNullOrEmpty(CodeText))
             {
-                if (await Shell.Current.DisplayAlert("Codestral Code Help", $"Codestral wants to rewrite your code:\n\n{rewrite}", "Allow", "Cancel"))
-                    CodeText = rewrite;
+                if (await Shell.Current.DisplayAlert("Codestral Code Help", $"Codestral wants to rewrite your code:\n\n{code}", "Allow", "Cancel"))
+                    CodeText = code;
             }
             else
-                CodeText = rewrite;
+                CodeText = code;
         }
 
         mainPage.AddMessage(response);
@@ -134,18 +107,22 @@ public partial class MainViewModel : ObservableObject
     {
         if (string.IsNullOrEmpty(JsonSaveSystem.JsonAppData?.LastOpenFile) || saveAs)
         {
-            FileResult? result = await _filePicker.PickAsync(new PickOptions()
-            {
-                PickerTitle = "Save the file.",
-            });
+            using MemoryStream stream = new(Encoding.UTF8.GetBytes(string.IsNullOrEmpty(CodeText) ? " " : CodeText));
+            FileSaverResult fileSaverResult = await _fileSaver.SaveAsync(string.Empty, stream);
 
-            if (result is null)
+            if (!fileSaverResult.IsSuccessful)
+            {
+                Debug.WriteLine($"Could not save file: {fileSaverResult.Exception?.Message}");
+
+                await Shell.Current.DisplayAlert("File Save Failed", "Could not save file.", "Ok");
                 return;
+            }
 
             JsonSaveSystem.ResetJsonAppData();
-            JsonSaveSystem.JsonAppData!.LastOpenFile = result.FullPath;
+            JsonSaveSystem.JsonAppData!.LastOpenFile = fileSaverResult.FilePath ?? string.Empty;
 
             await JsonSaveSystem.SaveJsonData(_fileSystem);
+            return;
         }
 
         SaveFile(JsonSaveSystem.JsonAppData.LastOpenFile);
@@ -154,7 +131,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task OnNew()
     {
-        if (!string.IsNullOrEmpty(JsonSaveSystem.JsonAppData?.LastOpenFile) || !string.IsNullOrWhiteSpace(CodeText))
+        if (!string.IsNullOrEmpty(JsonSaveSystem.JsonAppData?.LastOpenFile) || !string.IsNullOrEmpty(CodeText))
         {
             if (!await Shell.Current.DisplayAlert("Discard unsaved data?", "Do you want to discard unsaved data?", "Yes", "No"))
                 return;
@@ -170,7 +147,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task OnOpen()
     {
-        if (!string.IsNullOrEmpty(JsonSaveSystem.JsonAppData?.LastOpenFile) || !string.IsNullOrWhiteSpace(CodeText))
+        if (!string.IsNullOrEmpty(JsonSaveSystem.JsonAppData?.LastOpenFile) || !string.IsNullOrEmpty(CodeText))
         {
             if (!await Shell.Current.DisplayAlert("Discard unsaved data?", "Do you want to discard unsaved data?", "Yes", "No"))
                 return;

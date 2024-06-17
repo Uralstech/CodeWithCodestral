@@ -5,26 +5,42 @@ namespace CodeWithCodestral.ViewModels;
 
 public partial class MainViewModel
 {
-    private async Task<bool> CheckAndGetMistralApiKey(bool isSaving=false)
+    private static string GetCodeBlock(string text)
     {
-        if (string.IsNullOrWhiteSpace(MistralApi.MistralApi.ApiKey))
+        (int start, int end) = (-1, -1);
+
+        bool wasBacktick = false;
+        for (int i = 0; i < text.Length; i++)
         {
-            string key = await Shell.Current.DisplayPromptAsync("Mistral API Key", "Please enter your Mistral API key. You will not be able to use Codestral Code Help if you do not enter your API key.");
-            if (string.IsNullOrWhiteSpace(key))
-                return false;
+            switch (text[i])
+            {
+                case '`':
+                    if (start > -1)
+                    {
+                        end = i;
+                        break;
+                    }
 
-            MistralApi.MistralApi.ApiKey = key;
+                    if (text[Math.Max(0, i - 2)..Math.Min(text.Length - 1, i + 1)] == "```")
+                        wasBacktick = true;
+                    break;
+                case '\n':
+                    if (wasBacktick)
+                    {
+                        start = Math.Min(text.Length - 1, i + 1);
+                        wasBacktick = false;
+                    }
 
-            if (isSaving)
-                return true;
+                    break;
 
-            JsonSaveSystem.ResetJsonAppData();
-            JsonSaveSystem.JsonAppData!.MistralApiKey = key;
+                default: break;
+            }
 
-            await JsonSaveSystem.SaveJsonData(_fileSystem);
+            if (end > -1)
+                break;
         }
 
-        return true;
+        return text[start..end];
     }
 
     public async Task RunSetupProcedures()
@@ -49,6 +65,28 @@ public partial class MainViewModel
 
         if (!await JsonSaveSystem.SaveJsonData(_fileSystem))
             await Shell.Current.DisplayAlert("Failed Save", "For some reason, the app's save data could not be saved.", "Ok");
+    }
+
+    private async Task<bool> CheckAndGetMistralApiKey(bool isSaving=false)
+    {
+        if (string.IsNullOrWhiteSpace(MistralApi.MistralApi.ApiKey))
+        {
+            string key = await Shell.Current.DisplayPromptAsync("Mistral API Key", "Please enter your Mistral API key. You will not be able to use Codestral Code Help if you do not enter your API key.");
+            if (string.IsNullOrWhiteSpace(key))
+                return false;
+
+            MistralApi.MistralApi.ApiKey = key;
+
+            if (isSaving)
+                return true;
+
+            JsonSaveSystem.ResetJsonAppData();
+            JsonSaveSystem.JsonAppData!.MistralApiKey = key;
+
+            await JsonSaveSystem.SaveJsonData(_fileSystem);
+        }
+
+        return true;
     }
 
     private async void LoadFile(string filePath, string? fallbackPath = null)
